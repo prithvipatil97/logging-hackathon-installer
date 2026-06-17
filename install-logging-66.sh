@@ -251,8 +251,8 @@ do_uninstall() {
     oc delete csv -n openshift-operators-redhat -l operators.coreos.com/loki-operator.openshift-operators-redhat --ignore-not-found 2>/dev/null || true
 
     info "Deleting OperatorGroups..."
-    oc delete operatorgroup cluster-logging -n openshift-logging --ignore-not-found 2>/dev/null || true
-    oc delete operatorgroup loki-operator -n openshift-operators-redhat --ignore-not-found 2>/dev/null || true
+    oc delete operatorgroup --all -n openshift-logging --ignore-not-found 2>/dev/null || true
+    oc delete operatorgroup --all -n openshift-operators-redhat --ignore-not-found 2>/dev/null || true
 
     info "Deleting CatalogSources..."
     oc delete catalogsource clo-stage -n openshift-marketplace --ignore-not-found 2>/dev/null || true
