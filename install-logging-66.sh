@@ -475,6 +475,8 @@ step_create_logging_operator() {
     step "6" "Installing Cluster Logging Operator"
 
     oc create namespace openshift-logging --dry-run=client -o yaml | oc apply -f - 2>/dev/null
+    oc label namespace openshift-logging openshift.io/cluster-monitoring="true" --overwrite 2>/dev/null
+    success "Namespace openshift-logging labeled with cluster-monitoring=true"
 
     local existing_ogs
     existing_ogs=$(oc get operatorgroup -n openshift-logging --no-headers -o custom-columns=NAME:.metadata.name 2>/dev/null || echo "")
@@ -540,6 +542,8 @@ step_create_loki_operator() {
     step "7" "Installing Loki Operator"
 
     oc create namespace openshift-operators-redhat --dry-run=client -o yaml | oc apply -f - 2>/dev/null
+    oc label namespace openshift-operators-redhat openshift.io/cluster-monitoring="true" --overwrite 2>/dev/null
+    success "Namespace openshift-operators-redhat labeled with cluster-monitoring=true"
 
     local existing_ogs
     existing_ogs=$(oc get operatorgroup -n openshift-operators-redhat --no-headers -o custom-columns=NAME:.metadata.name 2>/dev/null || echo "")
