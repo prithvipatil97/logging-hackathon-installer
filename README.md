@@ -112,13 +112,15 @@ In the OpenShift Web Console: **Ecosystem → Installed Operators**
 | `test-67-hardening-validation.sh` | LOG-9354 hardening (LFME, ubi-micro, NetworkPolicy, CLO requests) | Read-only |
 | `test-boltdb-loki4-migration.sh` | LOG-9510 BoltDB / Loki 4.0 migration | Creates and deletes test LokiStacks |
 | `test-clf-not-ready-alert.sh` | LOG-7717 ClusterLogForwarderNotReady alert | Creates and deletes a CLF |
-| `test-67-must-gather.sh` | LOG-9008 must-gather as a Go binary | Runs `oc adm must-gather` unless `--skip-gather` |
+| `test-67-must-gather.sh` | LOG-9008 must-gather as a Go binary | Runs `oc adm must-gather` unless `--skip-gather`. Prints Why / What / Pass means before each check. |
 
 ```bash
 ./test-67-must-gather.sh                 # image checks + full gather
 ./test-67-must-gather.sh --skip-gather   # image packaging only
 ./test-67-must-gather.sh --keep          # keep the gather directory
 ```
+
+`test-67-must-gather.sh` is the LOG-9008 check. Logging must-gather used to be shell scripts that called `oc`. In 6.7 it is a Go binary in the Cluster Logging Operator image (`/usr/bin/must-gather`, symlink `/usr/bin/gather`, no `oc`). The script explains each step as it runs: inspect that packaging inside the CLO pod, run the customer `oc adm must-gather` command, then confirm the dump has `gather-debug.log`, `namespaces/openshift-logging`, `cluster-scoped-resources`, collector SUCCESS lines, and no ELK leftovers.
 
 ## Compatible Versions
 

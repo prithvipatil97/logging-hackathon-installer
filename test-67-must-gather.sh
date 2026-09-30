@@ -3,7 +3,7 @@
 #
 #  Test: Logging must-gather Go binary (LOG-9008)
 #
-#  Version: 1.0.0
+#  Version: 1.1.0
 #  Epic:    LOG-9354 - Log Collection 6.7 Tech Debt
 #
 #  Purpose:
@@ -39,7 +39,7 @@ set -uo pipefail
 # =============================================================================
 
 NAMESPACE="openshift-logging"
-SCRIPT_VERSION="1.0.0"
+SCRIPT_VERSION="1.1.0"
 SCRIPT_START_TIME=$(date +%s)
 PHASE_PAUSE=2
 KEEP=0
@@ -103,7 +103,12 @@ Usage: ./test-67-must-gather.sh [options]
   --timeout MINUTES   Timeout for oc adm must-gather (default: 15)
   -h, --help          Show this help
 
-Jira: LOG-9008 (must-gather reimplemented as a Go binary)
+What this test is (LOG-9008):
+  Logging must-gather used to be shell scripts that called `oc`. In 6.7 it is a
+  compiled Go binary in the Cluster Logging Operator image. This script checks
+  that packaging, then runs the same `oc adm must-gather` command customers use.
+
+The script prints Why / What we do / Pass means before every check.
 EOF
 }
 
@@ -180,6 +185,62 @@ phase_transition() {
 log_info() { echo -e "  ${BCYAN}  ℹ ${NC} ${WHITE}$1${NC}"; }
 log_action() { echo -e "  ${BMAGENTA}  ▸ ${NC} ${BOLD}$1${NC}"; }
 log_detail() { echo -e "  ${DIM}      $1${NC}"; }
+log_proves() { echo -e "  ${DIM}      This proves: $1${NC}"; }
+
+print_briefing() {
+    echo -e "  ${BWHITE}  What you are testing${NC}"
+    echo -e "  ${DIM}  ─────────────────────────────────────────────────────────────────────${NC}"
+    echo -e "  ${WHITE}  Support asks customers to dump Cluster Logging state with:${NC}"
+    echo -e "  ${BWHITE}    oc adm must-gather --image=<CLO image> -- /usr/bin/gather${NC}"
+    echo ""
+    echo -e "  ${WHITE}  That dump (namespaces, CRDs, LokiStack, collector pods, logs) is what${NC}"
+    echo -e "  ${WHITE}  we attach to a bug so engineering can debug without cluster access.${NC}"
+    echo ""
+    echo -e "  ${BWHITE}  What changed in Logging 6.7 (LOG-9008)${NC}"
+    echo -e "  ${WHITE}  OLD: must-gather was shell scripts in the CLO image. Those scripts${NC}"
+    echo -e "  ${WHITE}       called ${BWHITE}oc${NC}${WHITE}, so the image had to ship the oc binary (extra CVEs).${NC}"
+    echo -e "  ${WHITE}  NEW: must-gather is a compiled Go program at ${BWHITE}/usr/bin/must-gather${NC}${WHITE}.${NC}"
+    echo -e "  ${WHITE}       ${BWHITE}/usr/bin/gather${NC}${WHITE} is a symlink so the documented command still works.${NC}"
+    echo -e "  ${WHITE}       The image no longer contains ${BWHITE}oc${NC}${WHITE}.${NC}"
+    echo ""
+    echo -e "  ${BWHITE}  What this script proves${NC}"
+    echo -e "  ${WHITE}  1. The installed CLO image has that Go binary (not the old scripts)${NC}"
+    echo -e "  ${WHITE}  2. ${BWHITE}oc adm must-gather${NC}${WHITE} using that image actually completes${NC}"
+    echo -e "  ${WHITE}  3. The dump has the expected top-level layout${NC}"
+    echo ""
+    echo -e "  ${BWHITE}  What this script does not do${NC}"
+    echo -e "  ${WHITE}  It does not grade every YAML file. Use ${BWHITE}--keep${NC}${WHITE} and open${NC}"
+    echo -e "  ${WHITE}  ${BWHITE}gather-debug.log${NC}${WHITE} if you want to inspect the dump yourself.${NC}"
+    echo ""
+    echo -e "  ${BWHITE}  Phases${NC}"
+    echo -e "  ${WHITE}  1 Prerequisites   login + running CLO (inspect THIS cluster's image)${NC}"
+    echo -e "  ${WHITE}  2 Image packaging oc exec into the CLO pod; look at files in the image${NC}"
+    echo -e "  ${WHITE}  3 Run gather      the real customer command (creates a temp namespace)${NC}"
+    echo -e "  ${WHITE}  4 Inspect dump    confirm artifacts you would attach to a bug${NC}"
+    echo -e "  ${DIM}  ─────────────────────────────────────────────────────────────────────${NC}"
+    echo ""
+}
+
+explain_phase() {
+    echo -e "  ${BWHITE}  What this phase does${NC}"
+    while [ $# -gt 0 ]; do
+        echo -e "  ${WHITE}    $1${NC}"
+        shift
+    done
+    echo ""
+}
+
+explain_check() {
+    local name=$1
+    local why=$2
+    local what=$3
+    local pass_means=$4
+    echo ""
+    echo -e "  ${BWHITE}  Check: ${name}${NC}"
+    echo -e "  ${CYAN}    Why:${NC}        ${WHITE}${why}${NC}"
+    echo -e "  ${CYAN}    What we do:${NC}  ${WHITE}${what}${NC}"
+    echo -e "  ${CYAN}    Pass means:${NC}  ${WHITE}${pass_means}${NC}"
+}
 
 log_pass() {
     echo -e "  ${BGREEN}  ✔ ${NC} ${BGREEN}PASS${NC}  $1"
@@ -265,13 +326,22 @@ trap cleanup EXIT
 # =============================================================================
 
 print_banner
+print_briefing
 
 # -----------------------------------------------------------------------------
 #  PHASE 1: PREREQUISITES
 # -----------------------------------------------------------------------------
 
 print_phase_header 1 "Prerequisites Check" "N/A"
+explain_phase \
+    "Confirm you are logged in and Cluster Logging Operator is running." \
+    "Later phases inspect files inside the CLO pod and run must-gather" \
+    "using this cluster's installed operator image — not a random quay tag."
 
+explain_check "OC Login" \
+    "must-gather and oc exec require a working kubeconfig." \
+    "Run oc whoami and print the API server URL." \
+    "You are authenticated to a cluster."
 log_action "Checking oc CLI access..."
 if ! oc whoami &>/dev/null; then
     log_fail "Not logged in to OpenShift cluster"
@@ -281,7 +351,12 @@ fi
 log_pass "Logged in as: ${BWHITE}$(oc whoami)${NC}"
 log_detail "Cluster: $(oc whoami --show-server 2>/dev/null)"
 record_result "OC Login" "PASS"
+log_proves "later oc exec and oc adm must-gather will run against this cluster."
 
+explain_check "CLO Running" \
+    "must-gather lives in the Cluster Logging Operator image, not a separate plugin image." \
+    "Find a Running pod labeled cluster-logging-operator in openshift-logging." \
+    "CLO is installed so we can inspect its filesystem and use its image."
 log_action "Checking Cluster Logging Operator..."
 CLO_POD=$(oc get pods -n "${NAMESPACE}" -l app.kubernetes.io/name=cluster-logging-operator \
     -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
@@ -302,7 +377,12 @@ if [ "$CLO_STATUS" != "Running" ]; then
 fi
 log_pass "CLO is running: ${BWHITE}${CLO_POD}${NC}"
 record_result "CLO Running" "PASS"
+log_proves "Phase 2 can oc exec into this pod; Phase 3 can reuse the same image."
 
+explain_check "CLO Image" \
+    "oc adm must-gather --image= must point at the operator image customers run." \
+    "Read the image from the cluster-logging-operator Deployment (same as docs)." \
+    "We captured the exact image digest/tag installed on this cluster."
 log_action "Resolving CLO operator image..."
 CLO_IMAGE=$(oc get deploy cluster-logging-operator -n "${NAMESPACE}" \
     -o jsonpath='{.spec.template.spec.containers[?(@.name=="cluster-logging-operator")].image}' 2>/dev/null)
@@ -318,6 +398,7 @@ fi
 log_pass "CLO image resolved"
 log_detail "${CLO_IMAGE}"
 record_result "CLO Image" "PASS"
+log_proves "Phase 3 will pass this image to oc adm must-gather --image=..."
 
 print_phase_complete 1
 
@@ -327,20 +408,30 @@ print_phase_complete 1
 
 phase_transition 2 "Image packaging"
 print_phase_header 2 "Must-gather is a Go binary (no oc / no shell scripts)" "LOG-9008"
+explain_phase \
+    "Look inside the running CLO pod (same container image used for gather)." \
+    "LOG-9008 replaced shell collection-scripts with a Go binary." \
+    "We check the binary exists, is ELF (not #!), gather is a symlink," \
+    "and oc / old gather_* scripts are gone."
 
-log_info "LOG-9008 ships /usr/bin/must-gather as a compiled binary and a"
-log_info "symlink /usr/bin/gather. The image no longer includes oc or the"
-log_info "old collection-scripts."
-echo ""
-
+explain_check "Binary Exists" \
+    "If /usr/bin/must-gather is missing, this image still has the old gather layout." \
+    "oc exec into the CLO pod and test -f /usr/bin/must-gather." \
+    "The Go entrypoint is present in the installed image."
 log_action "Checking /usr/bin/must-gather exists..."
 if pod_exec test -f /usr/bin/must-gather; then
     MG_SIZE=$(pod_exec ls -l /usr/bin/must-gather | awk '{print $5}')
     log_pass "/usr/bin/must-gather is present (${MG_SIZE} bytes)"
     record_result "Binary Exists" "PASS"
+    log_proves "the image ships the new gather entrypoint."
+    explain_check "Binary Size" \
+        "Old gather was a tiny shell script. The Go binary is tens of megabytes." \
+        "Read the file size from ls -l inside the pod. Expect more than 1MB." \
+        "The file is large enough to be a compiled program, not a script."
     if [ "${MG_SIZE:-0}" -gt 1000000 ] 2>/dev/null; then
         log_pass "Binary size looks like a compiled Go binary (>1MB)"
         record_result "Binary Size" "PASS"
+        log_proves "this is not a leftover shell wrapper."
     else
         log_fail "Binary is only ${MG_SIZE} bytes (old shell gather was tiny)"
         record_result "Binary Size" "FAIL"
@@ -351,31 +442,46 @@ else
     record_result "Binary Size" "FAIL"
 fi
 
+explain_check "ELF Magic" \
+    "A shell script starts with #! (bytes 23 21). A Linux binary starts with ELF 7f 45 4c 46." \
+    "oc exec: od -An -tx1 -N 4 /usr/bin/must-gather and compare to 7f454c46." \
+    "must-gather is a compiled ELF binary, not a bash script."
 log_action "Checking ELF magic on /usr/bin/must-gather..."
 ELF_HEX=$(pod_exec od -An -tx1 -N 4 /usr/bin/must-gather 2>/dev/null | tr -d ' \n\t')
 if [ "$ELF_HEX" = "7f454c46" ]; then
     log_pass "must-gather is ELF (7f 45 4c 46) — compiled binary, not a script"
     record_result "ELF Magic" "PASS"
+    log_proves "LOG-9008 packaging is in this image (not the old #!/bin/bash gather)."
 else
     log_fail "must-gather is not ELF (got: ${ELF_HEX:-empty})"
     log_detail "A shell gather starts with #!  (23 21)."
     record_result "ELF Magic" "FAIL"
 fi
 
+explain_check "Gather Symlink" \
+    "Docs and oc adm must-gather still call /usr/bin/gather. Dockerfile does ln -s must-gather gather." \
+    "oc exec: ls -l /usr/bin/gather and confirm it points at /usr/bin/must-gather." \
+    "The documented gather command runs the Go binary."
 log_action "Checking /usr/bin/gather symlink..."
 GATHER_LINK=$(pod_exec ls -l /usr/bin/gather 2>/dev/null || true)
 if echo "$GATHER_LINK" | grep -Fq -- '-> /usr/bin/must-gather'; then
     log_pass "/usr/bin/gather -> /usr/bin/must-gather"
     record_result "Gather Symlink" "PASS"
+    log_proves "customers can keep using -- /usr/bin/gather."
 elif pod_exec test -f /usr/bin/gather && [ "$ELF_HEX" = "7f454c46" ]; then
     log_pass "/usr/bin/gather exists as an ELF binary"
     record_result "Gather Symlink" "PASS"
+    log_proves "gather is the Go binary even if it is not a symlink."
 else
     log_fail "/usr/bin/gather is missing or is not the Go binary"
     log_detail "${GATHER_LINK:-not found}"
     record_result "Gather Symlink" "FAIL"
 fi
 
+explain_check "No oc Binary" \
+    "The old scripts shelled out to oc. LOG-9008 uses the Kubernetes Go client instead so oc can leave the image." \
+    "oc exec: test -e /usr/bin/oc (expect missing)." \
+    "The operator image no longer ships oc (smaller CVE surface)."
 log_action "Checking oc was removed from the operator image..."
 if pod_exec test -e /usr/bin/oc; then
     log_fail "/usr/bin/oc is still in the image (old must-gather depended on oc)"
@@ -383,8 +489,13 @@ if pod_exec test -e /usr/bin/oc; then
 else
     log_pass "/usr/bin/oc is absent (Go must-gather uses the Kubernetes client)"
     record_result "No oc Binary" "PASS"
+    log_proves "must-gather no longer depends on oc inside the image."
 fi
 
+explain_check "No Shell Scripts" \
+    "The old image copied must-gather/collection-scripts/* into /usr/bin (gather_*, collection helpers)." \
+    "List /usr/bin and look for leftover gather_* or collection* names." \
+    "The shell collection-scripts were removed from this image."
 log_action "Checking leftover collection-scripts..."
 SCRIPT_LEFTOVERS=$(pod_exec sh -c 'ls /usr/bin 2>/dev/null' | grep -E '^(gather_|collection)' || true)
 if [ -n "$SCRIPT_LEFTOVERS" ]; then
@@ -393,6 +504,7 @@ if [ -n "$SCRIPT_LEFTOVERS" ]; then
 else
     log_pass "No leftover gather_* / collection-scripts in /usr/bin"
     record_result "No Shell Scripts" "PASS"
+    log_proves "only the Go binary (and the gather symlink) remain."
 fi
 
 print_phase_complete 2
@@ -403,13 +515,22 @@ print_phase_complete 2
 
 phase_transition 3 "Run oc adm must-gather"
 print_phase_header 3 "Run oc adm must-gather with the CLO image" "LOG-9008"
+explain_phase \
+    "Packaging is not enough: the binary must actually collect data." \
+    "This is the same command a customer (or support) runs for a logging case." \
+    "OpenShift creates a temporary namespace, runs /usr/bin/gather in a pod," \
+    "then copies the dump to your machine. --keep leaves that directory on disk."
 
 if [ "$SKIP_GATHER" -eq 1 ]; then
     log_skip "Skipped (--skip-gather). Artifact checks will be skipped."
     record_result "Gather Completes" "SKIP"
     print_phase_complete 3
 else
-    log_info "This creates a temporary must-gather namespace, then copies"
+    explain_check "Gather Completes" \
+        "A Go binary that exists but crashes is still a product failure." \
+        "Run: oc adm must-gather --image=<CLO image> --dest-dir=... -- /usr/bin/gather" \
+        "must-gather exited 0 and copied artifacts locally."
+    log_info "OpenShift will create a temporary must-gather namespace, then copy"
     log_info "artifacts to ${BWHITE}${DEST_DIR}${NC}"
     echo ""
     mkdir -p "$DEST_DIR"
@@ -429,6 +550,7 @@ else
     if [ "$GATHER_RC" -eq 0 ]; then
         log_pass "oc adm must-gather exited 0"
         record_result "Gather Completes" "PASS"
+        log_proves "the Go gather ran end-to-end on this cluster."
     else
         log_fail "oc adm must-gather exited ${GATHER_RC} (artifacts may still be present)"
         record_result "Gather Completes" "FAIL"
@@ -442,6 +564,11 @@ fi
 
 phase_transition 4 "Inspect artifacts"
 print_phase_header 4 "Must-gather artifact layout" "LOG-9008"
+explain_phase \
+    "LOG-9008 also changed the dump layout (no duplicate cluster-logging tree, no ELK)." \
+    "We only check the top-level pieces testers need to recognize:" \
+    "debug log, openshift-logging namespace dump, cluster-scoped resources," \
+    "collector SUCCESS lines, and no elasticsearch/fluentd leftover paths."
 
 if [ "$SKIP_GATHER" -eq 1 ]; then
     log_skip "No artifacts to inspect (--skip-gather)"
@@ -464,28 +591,47 @@ else
         record_result "Collectors Logged" "FAIL"
         record_result "No ELK Leftovers" "SKIP"
     else
+        explain_check "Debug Log" \
+            "The Go gather writes gather-debug.log (timestamped BEGIN/END and SUCCESS lines)." \
+            "Find gather-debug.log under --dest-dir; that directory is the gather root." \
+            "The dump includes the debug log we would read on a support case."
         log_pass "Found gather root: ${GATHER_ROOT}"
         record_result "Debug Log" "PASS"
         log_detail "Debug log: ${GATHER_ROOT}/gather-debug.log"
+        log_proves "oc adm must-gather copied the plugin output to this host."
 
+        explain_check "Logging Namespace" \
+            "A logging must-gather is useless if openshift-logging was not collected." \
+            "Test that namespaces/openshift-logging exists under the gather root." \
+            "CLO, collectors, and LokiStack objects from this cluster are in the dump."
         log_action "Checking namespaces/openshift-logging..."
         if [ -d "${GATHER_ROOT}/namespaces/openshift-logging" ]; then
             log_pass "namespaces/openshift-logging is present"
             record_result "Logging Namespace" "PASS"
+            log_proves "namespace-scoped logging resources were collected."
         else
             log_fail "namespaces/openshift-logging is missing"
             record_result "Logging Namespace" "FAIL"
         fi
 
+        explain_check "Cluster Scoped" \
+            "CRDs, nodes, and other cluster objects live under cluster-scoped-resources/ (not only namespaces/)." \
+            "Test that cluster-scoped-resources exists under the gather root." \
+            "Cluster-wide logging APIs were collected."
         log_action "Checking cluster-scoped-resources..."
         if [ -d "${GATHER_ROOT}/cluster-scoped-resources" ]; then
             log_pass "cluster-scoped-resources is present"
             record_result "Cluster Scoped" "PASS"
+            log_proves "cluster-scoped collectors ran (CRDs, nodes, and similar)."
         else
             log_fail "cluster-scoped-resources is missing"
             record_result "Cluster Scoped" "FAIL"
         fi
 
+        explain_check "Collectors Logged" \
+            "The Go orchestrator runs named collectors (Version, Cluster, Namespace, LogStore, UIPlugin, ...)." \
+            "Grep gather-debug.log for ' SUCCESS:' (lines are timestamp-prefixed) and no FAILED." \
+            "Every collector finished successfully — the dump is complete, not a partial crash."
         log_action "Checking collector SUCCESS lines in gather-debug.log..."
         # Logger prefixes every line with "YYYY-MM-DD HH:MM:SS ", so do not anchor at ^
         SUCCESS_COUNT=$(grep -c " SUCCESS:" "${GATHER_ROOT}/gather-debug.log" 2>/dev/null || true)
@@ -499,6 +645,7 @@ else
                 log_detail "$line"
             done
             record_result "Collectors Logged" "PASS"
+            log_proves "Version, Cluster, Namespace, LogStore, and related collectors all succeeded."
         else
             log_fail "Collectors did not all succeed (SUCCESS=${SUCCESS_COUNT} FAILED=${FAILED_COUNT})"
             grep -E " SUCCESS:| FAILED:|Must-gather collection complete" "${GATHER_ROOT}/gather-debug.log" 2>/dev/null | while IFS= read -r line; do
@@ -507,6 +654,10 @@ else
             record_result "Collectors Logged" "FAIL"
         fi
 
+        explain_check "No ELK Leftovers" \
+            "LOG-9008 removed obsolete Elasticsearch/Fluentd gather paths. Seeing them means an old script layout." \
+            "find the dump for *elasticsearch* or *fluentd* artifact names." \
+            "The dump is Loki/Vector-era layout, not the old ELK must-gather tree."
         log_action "Checking obsolete ELK / fluentd gather paths are gone..."
         ELK_HITS=$(find "${GATHER_ROOT}" \( -iname '*elasticsearch*' -o -iname '*fluentd*' \) 2>/dev/null | head -5 || true)
         if [ -n "$ELK_HITS" ]; then
@@ -518,6 +669,7 @@ else
         else
             log_pass "No elasticsearch/fluentd artifact paths"
             record_result "No ELK Leftovers" "PASS"
+            log_proves "obsolete ELK gather trees were not written."
         fi
     fi
 fi
@@ -591,11 +743,19 @@ echo -e "  ${BWHITE}└──────┴────────────
 echo ""
 echo -e "  ${BWHITE}  Summary:${NC}  ${BGREEN}${TOTAL_PASS} Passed${NC}  ${DIM}|${NC}  ${BRED}${TOTAL_FAIL} Failed${NC}  ${DIM}|${NC}  ${BYELLOW}${TOTAL_SKIP} Skipped${NC}"
 echo ""
+echo -e "  ${BWHITE}  How to read this report${NC}"
+echo -e "  ${WHITE}  All PASS = LOG-9008 is in this 6.7 image and gather produced a usable dump.${NC}"
+echo -e "  ${WHITE}  Phase 2 FAIL = this image still looks like the old shell-based must-gather.${NC}"
+echo -e "  ${WHITE}  Phase 3 FAIL = gather did not finish (image pull, timeout, or permissions).${NC}"
+echo -e "  ${WHITE}  Phase 4 FAIL = a dump exists but layout or collectors are wrong.${NC}"
+echo -e "  ${WHITE}  --keep: open gather-debug.log, namespaces/openshift-logging, cluster-scoped-resources.${NC}"
+echo ""
 
 if [ "$KEEP" -eq 1 ] && [ "$SKIP_GATHER" -eq 0 ]; then
     echo -e "  ${DIM}Must-gather output kept at:${NC} ${BWHITE}${DEST_DIR}${NC}"
     if [ -n "${GATHER_ROOT:-}" ]; then
         echo -e "  ${DIM}Gather root:${NC} ${BWHITE}${GATHER_ROOT}${NC}"
+        echo -e "  ${DIM}Start here:${NC}  ${BWHITE}${GATHER_ROOT}/gather-debug.log${NC}"
     fi
     echo ""
 elif [ "$SKIP_GATHER" -eq 0 ]; then
