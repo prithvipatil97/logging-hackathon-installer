@@ -105,6 +105,21 @@ In the OpenShift Web Console: **Ecosystem → Installed Operators**
 - Red Hat OpenShift Logging Operator v6.7
 - Loki Operator v6.7
 
+## Hackathon test scripts
+
+| Script | What it checks | Notes |
+|--------|----------------|-------|
+| `test-67-hardening-validation.sh` | LOG-9354 hardening (LFME, ubi-micro, NetworkPolicy, CLO requests) | Read-only |
+| `test-boltdb-loki4-migration.sh` | LOG-9510 BoltDB / Loki 4.0 migration | Creates and deletes test LokiStacks |
+| `test-clf-not-ready-alert.sh` | LOG-7717 ClusterLogForwarderNotReady alert | Creates and deletes a CLF |
+| `test-67-must-gather.sh` | LOG-9008 must-gather as a Go binary | Runs `oc adm must-gather` unless `--skip-gather` |
+
+```bash
+./test-67-must-gather.sh                 # image checks + full gather
+./test-67-must-gather.sh --skip-gather   # image packaging only
+./test-67-must-gather.sh --keep          # keep the gather directory
+```
+
 ## Compatible Versions
 
 | Logging | Loki | OCP |
