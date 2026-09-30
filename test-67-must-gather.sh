@@ -487,16 +487,23 @@ else
         fi
 
         log_action "Checking collector SUCCESS lines in gather-debug.log..."
-        SUCCESS_COUNT=$(grep -c "^SUCCESS:" "${GATHER_ROOT}/gather-debug.log" 2>/dev/null || true)
+        # Logger prefixes every line with "YYYY-MM-DD HH:MM:SS ", so do not anchor at ^
+        SUCCESS_COUNT=$(grep -c " SUCCESS:" "${GATHER_ROOT}/gather-debug.log" 2>/dev/null || true)
         SUCCESS_COUNT=${SUCCESS_COUNT:-0}
-        if [ "$SUCCESS_COUNT" -gt 0 ]; then
+        FAILED_COUNT=$(grep -c " FAILED:" "${GATHER_ROOT}/gather-debug.log" 2>/dev/null || true)
+        FAILED_COUNT=${FAILED_COUNT:-0}
+        if grep -q "Must-gather collection complete" "${GATHER_ROOT}/gather-debug.log" 2>/dev/null \
+            && [ "$SUCCESS_COUNT" -gt 0 ] && [ "$FAILED_COUNT" -eq 0 ]; then
             log_pass "gather-debug.log has ${SUCCESS_COUNT} SUCCESS collector line(s)"
-            grep "^SUCCESS:" "${GATHER_ROOT}/gather-debug.log" | while IFS= read -r line; do
+            grep " SUCCESS:" "${GATHER_ROOT}/gather-debug.log" | while IFS= read -r line; do
                 log_detail "$line"
             done
             record_result "Collectors Logged" "PASS"
         else
-            log_fail "No SUCCESS: lines in gather-debug.log"
+            log_fail "Collectors did not all succeed (SUCCESS=${SUCCESS_COUNT} FAILED=${FAILED_COUNT})"
+            grep -E " SUCCESS:| FAILED:|Must-gather collection complete" "${GATHER_ROOT}/gather-debug.log" 2>/dev/null | while IFS= read -r line; do
+                log_detail "$line"
+            done
             record_result "Collectors Logged" "FAIL"
         fi
 
