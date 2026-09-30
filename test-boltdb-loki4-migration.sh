@@ -604,7 +604,8 @@ if [ -z "$PROM_RULES_JSON" ] || [ "$PROM_RULES_JSON" == '{"items":[]}' ]; then
         jq -s '{"items": [.[].items[]?]}' 2>/dev/null)
 fi
 
-BOLTDB_REFS_COUNT=$(echo "$PROM_RULES_JSON" | grep -c "loki_boltdb_shipper" 2>/dev/null || echo "0")
+BOLTDB_REFS_COUNT=$(echo "$PROM_RULES_JSON" | grep -c "loki_boltdb_shipper" 2>/dev/null || true)
+BOLTDB_REFS_COUNT=${BOLTDB_REFS_COUNT:-0}
 
 echo ""
 if [ "$BOLTDB_REFS_COUNT" -eq 0 ]; then
@@ -623,7 +624,8 @@ for ns in "${LOKI_OPERATOR_NS}" "${NAMESPACE}"; do
     DASHBOARD_CMS=$(oc get configmap -n "${ns}" -o name 2>/dev/null | grep -i "dashboard\|grafana" || true)
     if [ -n "$DASHBOARD_CMS" ]; then
         for cm in $DASHBOARD_CMS; do
-            REFS=$(oc get "${cm}" -n "${ns}" -o yaml 2>/dev/null | grep -c "loki_boltdb_shipper" 2>/dev/null || echo "0")
+            REFS=$(oc get "${cm}" -n "${ns}" -o yaml 2>/dev/null | grep -c "loki_boltdb_shipper" 2>/dev/null || true)
+            REFS=${REFS:-0}
             if [ "$REFS" -gt 0 ]; then
                 BOLTDB_REFS_CM=$((BOLTDB_REFS_CM + REFS))
                 log_detail "Found ${REFS} references in ${cm} (${ns})"
@@ -709,8 +711,10 @@ else
             record_result "Ruler Config" "SKIP"
         else
             # Check for "clients:" (plural) in remote_write section
-            HAS_CLIENTS_PLURAL=$(echo "$LOKI_CONFIG" | grep -c "clients:" 2>/dev/null || echo "0")
-            HAS_CLIENT_SINGULAR=$(echo "$LOKI_CONFIG" | grep -c "^[[:space:]]*client:" 2>/dev/null || echo "0")
+            HAS_CLIENTS_PLURAL=$(echo "$LOKI_CONFIG" | grep -c "clients:" 2>/dev/null || true)
+            HAS_CLIENTS_PLURAL=${HAS_CLIENTS_PLURAL:-0}
+            HAS_CLIENT_SINGULAR=$(echo "$LOKI_CONFIG" | grep -c "^[[:space:]]*client:" 2>/dev/null || true)
+            HAS_CLIENT_SINGULAR=${HAS_CLIENT_SINGULAR:-0}
 
             # Show the remote_write section
             REMOTE_WRITE_SECTION=$(echo "$LOKI_CONFIG" | grep -A 10 "remote_write" 2>/dev/null | head -12)
