@@ -506,21 +506,31 @@ phase_transition 4 "Alert Rule Validation"
 print_phase_header 4 "Verify BoltDB Deprecation Alert Rule Exists" "LOG-9744"
 
 log_info "Logging 6.7 introduces a Prometheus alert that warns users still on BoltDB."
-log_info "This alert fires when an existing LokiStack references BoltDB schema."
+log_info "This alert fires when an existing LokiStack uses an outdated storage schema."
+log_info "Expected alert name: ${BWHITE}LokistackSchemaUpgradesRequired${NC}"
 log_info "On a fresh install it won't fire, but the rule definition must exist."
 echo ""
 
-log_action "Fetching PrometheusRule resources from ${LOKI_OPERATOR_NS}..."
-PROM_RULES_JSON=$(oc get prometheusrule -n "${LOKI_OPERATOR_NS}" -o json 2>/dev/null)
+log_action "Fetching PrometheusRule resources from ${LOKI_OPERATOR_NS} and ${NAMESPACE}..."
 
-if [ -z "$PROM_RULES_JSON" ] || [ "$PROM_RULES_JSON" == "null" ]; then
-    log_info "No PrometheusRules found in ${LOKI_OPERATOR_NS}, checking ${NAMESPACE}..."
-    PROM_RULES_JSON=$(oc get prometheusrule -n "${NAMESPACE}" -o json 2>/dev/null)
+# Fetch from both namespaces and merge (alerts can be in either)
+PROM_RULES_LOKI=$(oc get prometheusrule -n "${LOKI_OPERATOR_NS}" -o json 2>/dev/null || echo '{"items":[]}')
+PROM_RULES_LOGGING=$(oc get prometheusrule -n "${NAMESPACE}" -o json 2>/dev/null || echo '{"items":[]}')
+
+# Combine both JSON results for searching
+PROM_RULES_JSON=$(echo "${PROM_RULES_LOKI}" "${PROM_RULES_LOGGING}" | \
+    jq -s '{"items": [.[].items[]?]}' 2>/dev/null)
+
+if [ -z "$PROM_RULES_JSON" ] || [ "$PROM_RULES_JSON" == '{"items":[]}' ]; then
+    log_fail "No PrometheusRules found in either namespace"
+    record_result "Alert Rule Exists" "FAIL"
 fi
 
-# Search for BoltDB-related alert names
+# Search for schema-upgrade / BoltDB-related alert names
+# Real alert name on live cluster: LokistackSchemaUpgradesRequired
+# Expression references: lokistack_status_condition{reason="StorageNeedsSchemaUpdate"}
 BOLTDB_ALERTS=$(echo "$PROM_RULES_JSON" | \
-    jq -r '.items[]?.spec.groups[]?.rules[]? | select(.alert != null) | select(.alert | test("(?i)boltdb|bolt_db|schema.*deprecat|storage.*deprecat")) | .alert' 2>/dev/null | sort -u)
+    jq -r '.items[]?.spec.groups[]?.rules[]? | select(.alert != null) | select(.alert | test("(?i)boltdb|bolt_db|schema.*deprecat|storage.*deprecat|schema.*upgrade|schema.*required|StorageNeedsSchema")) | .alert' 2>/dev/null | sort -u)
 
 echo ""
 if [ -n "$BOLTDB_ALERTS" ]; then
@@ -585,23 +595,23 @@ echo ""
 # --- Check PrometheusRules for boltdb_shipper references ---
 log_action "Scanning PrometheusRules for 'loki_boltdb_shipper' references..."
 
-BOLTDB_REFS_RULES=""
-for ns in "${LOKI_OPERATOR_NS}" "${NAMESPACE}"; do
-    REFS=$(oc get prometheusrule -n "${ns}" -o yaml 2>/dev/null | grep -c "loki_boltdb_shipper" 2>/dev/null || echo "0")
-    if [ "$REFS" -gt 0 ]; then
-        BOLTDB_REFS_RULES="${BOLTDB_REFS_RULES}${ns}: ${REFS} references\n"
-    fi
-done
+# Use the combined PROM_RULES_JSON from Phase 4 (has both namespaces)
+# If it's empty, re-fetch
+if [ -z "$PROM_RULES_JSON" ] || [ "$PROM_RULES_JSON" == '{"items":[]}' ]; then
+    PROM_RULES_LOKI=$(oc get prometheusrule -n "${LOKI_OPERATOR_NS}" -o json 2>/dev/null || echo '{"items":[]}')
+    PROM_RULES_LOGGING=$(oc get prometheusrule -n "${NAMESPACE}" -o json 2>/dev/null || echo '{"items":[]}')
+    PROM_RULES_JSON=$(echo "${PROM_RULES_LOKI}" "${PROM_RULES_LOGGING}" | \
+        jq -s '{"items": [.[].items[]?]}' 2>/dev/null)
+fi
+
+BOLTDB_REFS_COUNT=$(echo "$PROM_RULES_JSON" | grep -c "loki_boltdb_shipper" 2>/dev/null || echo "0")
 
 echo ""
-if [ -z "$BOLTDB_REFS_RULES" ]; then
+if [ "$BOLTDB_REFS_COUNT" -eq 0 ]; then
     log_pass "Zero 'loki_boltdb_shipper' references in PrometheusRules"
     record_result "Rules Cleaned" "PASS"
 else
-    log_fail "Found 'loki_boltdb_shipper' references still in PrometheusRules:"
-    echo -e "$BOLTDB_REFS_RULES" | while IFS= read -r line; do
-        [ -n "$line" ] && log_detail "$line"
-    done
+    log_fail "Found ${BOLTDB_REFS_COUNT} 'loki_boltdb_shipper' references still in PrometheusRules"
     record_result "Rules Cleaned" "FAIL"
 fi
 
@@ -609,18 +619,18 @@ fi
 log_action "Scanning ConfigMaps for BoltDB dashboard references..."
 
 BOLTDB_REFS_CM=0
-DASHBOARD_CMS=$(oc get configmap -n "${LOKI_OPERATOR_NS}" -o name 2>/dev/null | grep -i "dashboard\|grafana" || true)
-if [ -z "$DASHBOARD_CMS" ]; then
-    DASHBOARD_CMS=$(oc get configmap -n "${NAMESPACE}" -o name 2>/dev/null | grep -i "dashboard\|grafana" || true)
-fi
-
-if [ -n "$DASHBOARD_CMS" ]; then
-    for cm in $DASHBOARD_CMS; do
-        REFS=$(oc get "${cm}" -n "${LOKI_OPERATOR_NS}" -o yaml 2>/dev/null | grep -c "loki_boltdb_shipper" 2>/dev/null || echo "0")
-        if [ "$REFS" -gt 0 ]; then
-            BOLTDB_REFS_CM=$((BOLTDB_REFS_CM + REFS))
-        fi
-    done
+for ns in "${LOKI_OPERATOR_NS}" "${NAMESPACE}"; do
+    DASHBOARD_CMS=$(oc get configmap -n "${ns}" -o name 2>/dev/null | grep -i "dashboard\|grafana" || true)
+    if [ -n "$DASHBOARD_CMS" ]; then
+        for cm in $DASHBOARD_CMS; do
+            REFS=$(oc get "${cm}" -n "${ns}" -o yaml 2>/dev/null | grep -c "loki_boltdb_shipper" 2>/dev/null || echo "0")
+            if [ "$REFS" -gt 0 ]; then
+                BOLTDB_REFS_CM=$((BOLTDB_REFS_CM + REFS))
+                log_detail "Found ${REFS} references in ${cm} (${ns})"
+            fi
+        done
+    fi
+done
 
     echo ""
     if [ "$BOLTDB_REFS_CM" -eq 0 ]; then
@@ -630,16 +640,12 @@ if [ -n "$DASHBOARD_CMS" ]; then
         log_fail "Found ${BOLTDB_REFS_CM} 'loki_boltdb_shipper' references in dashboards"
         record_result "Dashboards Cleaned" "FAIL"
     fi
-else
-    log_skip "No dashboard ConfigMaps found (may not be deployed yet)"
-    record_result "Dashboards Cleaned" "SKIP"
-fi
 
 # --- Check which alerts exist now (positive check) ---
 echo ""
 log_action "Listing current Loki storage-related alerts (should use TSDB metrics)..."
 STORAGE_ALERTS=$(echo "$PROM_RULES_JSON" | \
-    jq -r '.items[]?.spec.groups[]?.rules[]? | select(.alert != null) | select(.alert | test("(?i)storage|write|read|slow")) | "\(.alert) => \(.expr[0:60])"' 2>/dev/null)
+    jq -r '.items[]?.spec.groups[]?.rules[]? | select(.alert != null) | select(.alert | test("(?i)storage|write|read|slow|loki")) | "\(.alert)"' 2>/dev/null | sort -u)
 
 if [ -n "$STORAGE_ALERTS" ]; then
     echo "$STORAGE_ALERTS" | while IFS= read -r sa; do
